@@ -13,7 +13,10 @@ var CommonPrivateKey string
 var CommonPublicKey string
 var CommonSignature string
 
+var CommonCertificate Certificate
+
 const DIGEST = "Hello, Signatom!"
+const IDTOKEN = "eyJhbGciOiJSUzI1NiIsImtpZCI6IlNIN1RtRnRQUVRJQzJqTHhpYTJ2UGV3VjVvaUxrcEhpYUVwbDFLTXA5SnMifQ.eyJhdWQiOlsic2lnc3RvcmUiXSwiZXhwIjoxNzI0NzUxNDMwLCJpYXQiOjE3MjQ3NTA4MzAsImlzcyI6Imh0dHBzOi8va3ViZXJuZXRlcy5kZWZhdWx0LnN2Yy5jbHVzdGVyLmxvY2FsIiwia3ViZXJuZXRlcy5pbyI6eyJuYW1lc3BhY2UiOiJkZWZhdWx0IiwicG9kIjp7Im5hbWUiOiJnZXR0b2tlbi0wMDAwMS1kZXBsb3ltZW50LTdmOTlkN2JjODgtcHo5OXIiLCJ1aWQiOiI5MTE4NTMwMy0zZjhlLTRhMGYtOTQzMC0yYWQ3MjQ0YmFmOWQifSwic2VydmljZWFjY291bnQiOnsibmFtZSI6ImRlZmF1bHQiLCJ1aWQiOiI2Y2NhZTZmMi00MmQ4LTRiMDUtOTVhZS1jMDdhNzk5ZDQyNjkifX0sIm5iZiI6MTcyNDc1MDgzMCwic3ViIjoic3lzdGVtOnNlcnZpY2VhY2NvdW50OmRlZmF1bHQ6ZGVmYXVsdCJ9.ETEXJdw9HPrs_Tq46R5h09f7HzxiY7DlzcRDpGdiDCrhFgdxiC55ix55DwhiV6N4P6GpFtC7Ujc0c9MlmOoS1oikO0dRLiaBlCztbVTQRdgvHvga1K89qG85dmfh_6RWjIv77hL03XmYQ70MSXXdemIqewrpLpkzqjfZYi7DKCMjL_p6kBit62BfkcpCj7KFfEvHs1-nkQxFmZIW24LrUcxBXG0fasWTJ4vmTVkE8XNf9a2TdnP5DfhWx2p7OFmxNEfkAR8qEnrGvXyEyIdrRiK4mksfOt3utGPNH454z_Mh3SDYTjaJr9IZbp81UeuAEPLwfNRgeWTRlj5DO2r27w"
 
 // Request Structure
 type BaseConfig struct {
@@ -23,17 +26,40 @@ type BaseConfig struct {
 }
 type GenerateKeyRequest BaseConfig
 
-type SignwithKeyRequest struct {
+type KeySignRequest struct {
 	BaseConfig `json:"base_config"`
 	PrivateKey string `json:"priv"`
 	DigestData string `json:"digest"`
 }
 
-type VerifywithKeyRequest struct {
+type KeyVerifyRequest struct {
 	BaseConfig `json:"base_config"`
 	PublicKey  string `json:"pub"`
 	DigestData string `json:"digest"`
 	Signature  string `json:"signature"`
+}
+
+type SignwithoutKeyRequest struct {
+	BaseConfig `json:"base_config"`
+	DigestData string `json:"digest"`
+	IDToken    string `json:"id_token"`
+	SignMgr    string `json:"sign_mgr"`
+	SignMgrUrl string `json:"sign_mgr_url"`
+	CertMgr    string `json:"cert_mgr"`
+	CertMgrUrl string `json:"cert_mgr_url"`
+}
+
+type KeylessVerifyRequest struct {
+	BaseConfig `json:"base_config"`
+	Digest     string      `json:"digest"`
+	Signature  string      `json:"signature"`
+	Cert       Certificate `json:"cert"`
+	CertIssuer string      `json:"cert_issuer"`
+	CertSAN    string      `json:"cert_san"`
+	SignMgr    string      `json:"sign_mgr"`
+	SignMgrUrl string      `json:"sign_mgr_url"`
+	CertMgr    string      `json:"cert_mgr"`
+	CertMgrUrl string      `json:"cert_mgr_url"`
 }
 
 // Response Structure
@@ -50,19 +76,193 @@ type SignwithKeyResponse struct {
 	Cert       string `json:"cert"`
 }
 
-type VerifywithKeyResponse struct {
+type VerifyResponse struct {
 	BaseConfig `json:"base_config"`
 	Result     string `json:"result"`
 }
+
+// TODO: VERIFY BY TRUE RESPONSE
+type SignwithoutKeyResponse struct {
+	BaseConfig `json:"base_config"`
+	Signature  string      `json:"signature"`
+	Cert       Certificate `json:"cert"`
+}
+type Certificate struct {
+	CertPEM       string `json:"CertPEM"`
+	ChainPEM      string `json:"ChainPEM"`
+	SCT           string `json:"SCT"`
+	Identity      string `json:"Identity"`
+	Subject       string `json:"Subject"`
+	SubjectRegExp string `json:"SubjectRegExp"`
+	Issuer        string `json:"Issuer"`
+	IssuerRegExp  string `json:"IssuerRegExp"`
+	Token         string `json:"Token"`
+}
+type KeylessVerifyResponse VerifyResponse
 
 func main() {
 
 	http.HandleFunc("/generateKey", keyGenerationHandler)
 	http.HandleFunc("/signwithKey", signwithKeyHandler)
 	http.HandleFunc("/verifywithKey", verifywithKeyHandler)
+	http.HandleFunc("/signwithoutKey", signwithoutKeyHandler)
+	http.HandleFunc("/verifywithoutKey", verifywithoutKeyHandler)
 
 	log.Println("Key Generation Proxy started on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func verifywithoutKeyHandler(w http.ResponseWriter, r *http.Request) {
+	/*
+		1. jump-server check
+		2. send request
+			2.1 generate client
+			2.2 request struct
+			2.3 struct to json
+			2.4 request header set
+			2.5 send request
+		3. receive response
+			3.1 read response
+			2.3 parse response
+		4. jump server return
+	*/
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only Get method allow: %v", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var keylessVerifyRequest KeylessVerifyRequest
+	keylessVerifyRequest = KeylessVerifyRequest{
+		BaseConfig: BaseConfig{
+			Algo: "ecdsa",
+			Kms:  "",
+			Flow: "classic",
+		},
+		Signature: CommonSignature,
+		Cert:      CommonCertificate,
+	}
+
+	body, err := json.Marshal(keylessVerifyRequest)
+	if err != nil {
+		log.Printf("request data failed: %v", err)
+		http.Error(w, "generate request failed", http.StatusInternalServerError)
+		return
+	}
+
+	url := "https://10.20.173.8:18081/v1/verify/digest"
+
+	client := http.Client{Timeout: 5 * time.Second}
+
+	request, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(body))
+	if err != nil {
+		log.Printf("request failed: %v", err)
+		http.Error(w, "generate request failed", http.StatusInternalServerError)
+	}
+
+	request.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(request)
+	if err != nil {
+		log.Printf("http request failed: %v", err)
+		http.Error(w, "http request failed", http.StatusInternalServerError)
+		return
+	}
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("http request failed: %v", err)
+		http.Error(w, "http request failed", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	var vr VerifyResponse
+	err = json.Unmarshal(responseBody, &vr)
+	if err != nil {
+		log.Printf("http request failed: %v", err)
+		http.Error(w, "http request failed", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("Backend API response - Status: %d, Body: %s", string(body))
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	w.Write(body)
+}
+
+func signwithoutKeyHandler(w http.ResponseWriter, r *http.Request) {
+	// check if the request received from client is standard
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only GET Method Is Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// generate request
+	// generate client
+	client := http.Client{
+		Timeout: 5 * time.Second,
+	}
+	// construct request to signatom server
+	signwithoutKeyRequest := SignwithoutKeyRequest{
+		BaseConfig: BaseConfig{
+			Algo: "ecdsa",
+			Flow: "classic",
+		},
+		DigestData: DIGEST,
+
+		//TODO: How to Get ID Token? Generate another ID Token Service
+		IDToken:    IDTOKEN,
+		SignMgr:    "rekor",
+		SignMgrUrl: "http://rekor.rekor-system.svc:18080",
+		CertMgr:    "fulcio",
+		CertMgrUrl: "http://fulcio.fulcio-system.svc:18080",
+	}
+	// tranform requestData to json
+	requestBody, err := json.Marshal(signwithoutKeyRequest)
+	if err != nil {
+		log.Printf("construct request data failed: %v\n", err)
+		http.Error(w, "construct request data failed\n", http.StatusInternalServerError)
+		return
+	}
+	url := "http://10.20.173.8:18081/v1/sign/digest"
+	request, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(requestBody))
+	if err != nil {
+		log.Printf("generate http request failed: %v\n", err)
+		http.Error(w, "construct request data failed\n", http.StatusInternalServerError)
+	}
+	request.Header.Set("Content-Type", "application/json")
+
+	// send request
+	resp, err := client.Do(request)
+
+	// read response
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("read response failed: %v\n", err)
+		http.Error(w, "Read response failed", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	// parse reponse
+	var sr SignwithoutKeyResponse
+	err = json.Unmarshal(responseBody, &sr)
+	if err != nil {
+		log.Printf("parse reponse failed: %v\n", err)
+		http.Error(w, "Parse response failed", http.StatusInternalServerError)
+		return
+	}
+	CommonCertificate = sr.Cert
+	CommonSignature = sr.Signature
+
+	log.Printf("Backend API response - Status: %d, Body: %v", resp.StatusCode, sr)
+
+	// return the response to client
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	w.Write(responseBody)
+
 }
 
 func verifywithKeyHandler(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +278,7 @@ func verifywithKeyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// construct the request body with fixed parameters
-	verifywithKeyRequest := VerifywithKeyRequest{
+	keyVerifyRequest := KeyVerifyRequest{
 		BaseConfig: BaseConfig{
 			Algo: "sm2",
 			Kms:  "",
@@ -89,7 +289,7 @@ func verifywithKeyHandler(w http.ResponseWriter, r *http.Request) {
 		Signature:  CommonSignature,
 	}
 
-	reqBody, err := json.Marshal(verifywithKeyRequest)
+	reqBody, err := json.Marshal(keyVerifyRequest)
 	if err != nil {
 		log.Printf("JSON marshal error: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -127,7 +327,7 @@ func verifywithKeyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var vr VerifywithKeyResponse
+	var vr VerifyResponse
 	err = json.Unmarshal(body, &vr)
 	if err != nil {
 		log.Printf("Response parse error: %v", err)
@@ -157,7 +357,7 @@ func signwithKeyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Construct the request body with fixed parameters
-	signwithKeyRequest := SignwithKeyRequest{
+	keySignRequest := KeySignRequest{
 		BaseConfig: BaseConfig{
 			Algo: "sm2",
 			Kms:  "", // Empty string
@@ -168,7 +368,7 @@ func signwithKeyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Convert to JSON
-	reqBody, err := json.Marshal(signwithKeyRequest)
+	reqBody, err := json.Marshal(keySignRequest)
 	if err != nil {
 		log.Printf("JSON marshal error: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
