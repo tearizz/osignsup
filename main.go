@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -24,22 +25,24 @@ type BaseConfig struct {
 	Kms  string `json:"kms"`
 	Flow string `json:"flow"`
 }
-type GenerateKeyRequest BaseConfig
 
-type KeySignRequest struct {
+type rGenerateKey BaseConfig
+
+// Request Key Sign
+type rKeySign struct {
 	BaseConfig `json:"base_config"`
 	PrivateKey string `json:"priv"`
 	DigestData string `json:"digest"`
 }
 
-type KeyVerifyRequest struct {
+type rKeyVerify struct {
 	BaseConfig `json:"base_config"`
 	PublicKey  string `json:"pub"`
 	DigestData string `json:"digest"`
 	Signature  string `json:"signature"`
 }
 
-type SignwithoutKeyRequest struct {
+type rKeylessSign struct {
 	BaseConfig `json:"base_config"`
 	DigestData string `json:"digest"`
 	IDToken    string `json:"id_token"`
@@ -49,7 +52,7 @@ type SignwithoutKeyRequest struct {
 	CertMgrUrl string `json:"cert_mgr_url"`
 }
 
-type KeylessVerifyRequest struct {
+type rKeylessVerify struct {
 	BaseConfig `json:"base_config"`
 	Digest     string      `json:"digest"`
 	Signature  string      `json:"signature"`
@@ -63,26 +66,26 @@ type KeylessVerifyRequest struct {
 }
 
 // Response Structure
-type GenerateKeyResponse struct {
+type rsGenerateKey struct {
 	BaseConfig `json:"base_conig"`
 	PrivateKey string `json:"priv"`
 	PublicKey  string `json:"pub"`
 	KeyId      string `json:"key_id"`
 }
 
-type SignwithKeyResponse struct {
+type rsKeySign struct {
 	BaseConfig `json:"base_config"`
 	Signature  string `json:"signature"`
 	Cert       string `json:"cert"`
 }
 
-type VerifyResponse struct {
+type rsVerify struct {
 	BaseConfig `json:"base_config"`
 	Result     string `json:"result"`
 }
 
 // TODO: VERIFY BY TRUE RESPONSE
-type SignwithoutKeyResponse struct {
+type rsKeylessSign struct {
 	BaseConfig `json:"base_config"`
 	Signature  string      `json:"signature"`
 	Cert       Certificate `json:"cert"`
@@ -98,41 +101,25 @@ type Certificate struct {
 	IssuerRegExp  string `json:"IssuerRegExp"`
 	Token         string `json:"Token"`
 }
-type KeylessVerifyResponse VerifyResponse
+type rsKeylessVerify rsVerify
 
 func main() {
 
 	http.HandleFunc("/generateKey", keyGenerationHandler)
-	http.HandleFunc("/signwithKey", signwithKeyHandler)
-	http.HandleFunc("/verifywithKey", verifywithKeyHandler)
-	http.HandleFunc("/signwithoutKey", signwithoutKeyHandler)
-	http.HandleFunc("/verifywithoutKey", verifywithoutKeyHandler)
+	http.HandleFunc("/signwithKey", keySignHandler)
+	http.HandleFunc("/verifywithKey", keyVerifyHandler)
+	http.HandleFunc("/signwithoutKey", keylessSignHandler)
+	http.HandleFunc("/verifywithoutKey", keylessVerifyHandler)
 
 	log.Println("Key Generation Proxy started on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func verifywithoutKeyHandler(w http.ResponseWriter, r *http.Request) {
-	/*
-		1. jump-server check
-		2. send request
-			2.1 generate client
-			2.2 request struct
-			2.3 struct to json
-			2.4 request header set
-			2.5 send request
-		3. receive response
-			3.1 read response
-			2.3 parse response
-		4. jump server return
-	*/
-	if r.Method != http.MethodGet {
-		http.Error(w, "Only Get method allow: %v", http.StatusMethodNotAllowed)
-		return
-	}
+func keylessVerifyHandler(w http.ResponseWriter, r *http.Request) {
 
-	var keylessVerifyRequest KeylessVerifyRequest
-	keylessVerifyRequest = KeylessVerifyRequest{
+	checkReceivedMethod(w, r)
+
+	rklv := rKeylessVerify{
 		BaseConfig: BaseConfig{
 			Algo: "ecdsa",
 			Kms:  "",
@@ -142,69 +129,33 @@ func verifywithoutKeyHandler(w http.ResponseWriter, r *http.Request) {
 		Cert:      CommonCertificate,
 	}
 
-	body, err := json.Marshal(keylessVerifyRequest)
-	if err != nil {
-		log.Printf("request data failed: %v", err)
-		http.Error(w, "generate request failed", http.StatusInternalServerError)
-		return
-	}
-
 	url := "https://10.20.173.8:18081/v1/verify/digest"
 
-	client := http.Client{Timeout: 5 * time.Second}
-
-	request, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(body))
+	rsbody, statusCode, err := makeRequest(&w, rklv, url)
 	if err != nil {
-		log.Printf("request failed: %v", err)
-		http.Error(w, "generate request failed", http.StatusInternalServerError)
+		log.Printf("%v", err)
+		return
 	}
 
-	request.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(request)
+	var vr rsVerify
+	err = json.Unmarshal(rsbody, &vr)
 	if err != nil {
 		log.Printf("http request failed: %v", err)
 		http.Error(w, "http request failed", http.StatusInternalServerError)
 		return
 	}
 
-	responseBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("http request failed: %v", err)
-		http.Error(w, "http request failed", http.StatusInternalServerError)
-		return
-	}
-	defer resp.Body.Close()
-
-	var vr VerifyResponse
-	err = json.Unmarshal(responseBody, &vr)
-	if err != nil {
-		log.Printf("http request failed: %v", err)
-		http.Error(w, "http request failed", http.StatusInternalServerError)
-		return
-	}
-
-	log.Printf("Backend API response - Status: %d, Body: %s", string(body))
+	log.Printf("Backend API response - Status: %d, Body: %v", statusCode, vr)
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	w.Write(body)
+	w.WriteHeader(statusCode)
+	w.Write(rsbody)
 }
 
-func signwithoutKeyHandler(w http.ResponseWriter, r *http.Request) {
-	// check if the request received from client is standard
-	if r.Method != http.MethodGet {
-		http.Error(w, "Only GET Method Is Allowed", http.StatusMethodNotAllowed)
-		return
-	}
+func keylessSignHandler(w http.ResponseWriter, r *http.Request) {
+	checkReceivedMethod(w, r)
 
-	// generate request
-	// generate client
-	client := http.Client{
-		Timeout: 5 * time.Second,
-	}
-	// construct request to signatom server
-	signwithoutKeyRequest := SignwithoutKeyRequest{
+	rkls := rKeylessSign{
 		BaseConfig: BaseConfig{
 			Algo: "ecdsa",
 			Flow: "classic",
@@ -218,67 +169,39 @@ func signwithoutKeyHandler(w http.ResponseWriter, r *http.Request) {
 		CertMgr:    "fulcio",
 		CertMgrUrl: "http://fulcio.fulcio-system.svc:18080",
 	}
-	// tranform requestData to json
-	requestBody, err := json.Marshal(signwithoutKeyRequest)
-	if err != nil {
-		log.Printf("construct request data failed: %v\n", err)
-		http.Error(w, "construct request data failed\n", http.StatusInternalServerError)
-		return
-	}
+
 	url := "http://10.20.173.8:18081/v1/sign/digest"
-	request, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(requestBody))
+	rsbody, statusCode, err := makeRequest(&w, rkls, url)
 	if err != nil {
-		log.Printf("generate http request failed: %v\n", err)
-		http.Error(w, "construct request data failed\n", http.StatusInternalServerError)
+		log.Printf("%v", err)
 	}
-	request.Header.Set("Content-Type", "application/json")
 
-	// send request
-	resp, err := client.Do(request)
-
-	// read response
-	responseBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("read response failed: %v\n", err)
-		http.Error(w, "Read response failed", http.StatusInternalServerError)
-		return
-	}
-	defer resp.Body.Close()
-
-	// parse reponse
-	var sr SignwithoutKeyResponse
-	err = json.Unmarshal(responseBody, &sr)
+	var rskls rsKeylessSign
+	err = json.Unmarshal(rsbody, &rskls)
 	if err != nil {
 		log.Printf("parse reponse failed: %v\n", err)
 		http.Error(w, "Parse response failed", http.StatusInternalServerError)
 		return
 	}
-	CommonCertificate = sr.Cert
-	CommonSignature = sr.Signature
+	CommonCertificate = rskls.Cert
+	CommonSignature = rskls.Signature
 
-	log.Printf("Backend API response - Status: %d, Body: %v", resp.StatusCode, sr)
+	log.Printf("Backend API response - Status: %d, Body: %v", statusCode, rskls)
 
-	// return the response to client
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	w.Write(responseBody)
-
+	w.WriteHeader(statusCode)
+	w.Write(rsbody)
 }
 
-func verifywithKeyHandler(w http.ResponseWriter, r *http.Request) {
-	// check received method
-	if r.Method != http.MethodGet {
-		http.Error(w, "Only GET method is allowed", http.StatusInternalServerError)
-	}
+func keyVerifyHandler(w http.ResponseWriter, r *http.Request) {
+	checkReceivedMethod(w, r)
 
-	//check parameters
 	if len(CommonSignature) == 0 || len(CommonPublicKey) == 0 || len(DIGEST) == 0 {
 		http.Error(w, "signature or public key or digest is not set", http.StatusInternalServerError)
 		return
 	}
 
-	// construct the request body with fixed parameters
-	keyVerifyRequest := KeyVerifyRequest{
+	rkv := rKeyVerify{
 		BaseConfig: BaseConfig{
 			Algo: "sm2",
 			Kms:  "",
@@ -289,66 +212,29 @@ func verifywithKeyHandler(w http.ResponseWriter, r *http.Request) {
 		Signature:  CommonSignature,
 	}
 
-	reqBody, err := json.Marshal(keyVerifyRequest)
+	url := "http://10.20.173.8:80/v1/verify/digest"
+	rsbody, statusCode, err := makeRequest(&w, rkv, url)
 	if err != nil {
-		log.Printf("JSON marshal error: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	// create a timeout HTTP client (5 seconds timeout)
-	client := &http.Client{Timeout: 5 * time.Second}
-
-	targetURL := "http://10.20.173.8:80/v1/verify/digest"
-	req, err := http.NewRequest("POST", targetURL, bytes.NewBuffer(reqBody))
-	if err != nil {
-		log.Printf("Request creation error: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// set request headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "VerifywithKey/1.0")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("API request failed: %v", err)
-		http.Error(w, "Backend service unavailable", http.StatusInternalServerError)
-		return
-	}
-	defer resp.Body.Close()
-
-	// read and parse response
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("Response read error: %v", err)
-		http.Error(w, "Error reading backend response", http.StatusInternalServerError)
-		return
-	}
-
-	var vr VerifyResponse
-	err = json.Unmarshal(body, &vr)
+	var vr rsVerify
+	err = json.Unmarshal(rsbody, &vr)
 	if err != nil {
 		log.Printf("Response parse error: %v", err)
 		http.Error(w, "Error parsing backend response", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("Backend API response - Status: %d, Body: %s", string(body))
+	log.Printf("Backend API response - Status: %d, Body: %v", statusCode, vr)
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	w.Write(body)
+	w.WriteHeader(statusCode)
+	w.Write(rsbody)
 }
 
-func signwithKeyHandler(w http.ResponseWriter, r *http.Request) {
-
-	// Check received method
-	if r.Method != http.MethodGet {
-		http.Error(w,
-			"Only GET method is allowed", http.StatusMethodNotAllowed)
-	}
+func keySignHandler(w http.ResponseWriter, r *http.Request) {
+	checkReceivedMethod(w, r)
 
 	// check common private key
 	if CommonPrivateKey == "" {
@@ -356,8 +242,7 @@ func signwithKeyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Construct the request body with fixed parameters
-	keySignRequest := KeySignRequest{
+	rks := rKeySign{
 		BaseConfig: BaseConfig{
 			Algo: "sm2",
 			Kms:  "", // Empty string
@@ -367,137 +252,103 @@ func signwithKeyHandler(w http.ResponseWriter, r *http.Request) {
 		DigestData: DIGEST, // Replace with actual digest data
 	}
 
-	// Convert to JSON
-	reqBody, err := json.Marshal(keySignRequest)
+	url := "http://10.20.173.8:80/v1/sign/digest"
+
+	rsbody, statusCode, err := makeRequest(&w, rks, url)
 	if err != nil {
-		log.Printf("JSON marshal error: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		log.Printf("%v", err)
 		return
 	}
 
-	// Create a timeout HTTP client (5 seconds timeout)
-	client := &http.Client{Timeout: 5 * time.Second}
-
-	// Create the target API request
-	targetURL := "http://10.20.173.8:80/v1/sign/digest"
-	req, err := http.NewRequest("POST", targetURL, bytes.NewBuffer(reqBody))
-	if err != nil {
-		log.Printf("Request creation error: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// Set request headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "SignwithKey/1.0")
-
-	// send request
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("API request failed: %v", err)
-		http.Error(w, "Backend service unavailable", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	// Read and Parse Response
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("Response read error: %v", err)
-		http.Error(w, "Error reading backend response", http.StatusInternalServerError)
-		return
-	}
-
-	var sr SignwithKeyResponse
-	err = json.Unmarshal(body, &sr)
+	var resks rsKeySign
+	err = json.Unmarshal(rsbody, &resks)
 	if err != nil {
 		log.Printf("Response parse error: %v", err)
 		http.Error(w, "Error reading backend response", http.StatusInternalServerError)
 		return
 	}
 
-	CommonSignature = sr.Signature
+	CommonSignature = resks.Signature
 
-	// log response
-	log.Printf("Backend API response - Status: %d, Body: %s", string(body))
+	log.Printf("Backend API response - Status: %d, Body: %v", statusCode, resks)
 
-	// return target response data to client
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	w.Write(body)
+	w.WriteHeader(statusCode)
+	w.Write(rsbody)
 }
 
 func keyGenerationHandler(w http.ResponseWriter, r *http.Request) {
-	// check GET method
-	if r.Method != http.MethodGet {
-		http.Error(w, "Only GET method is allowed", http.StatusMethodNotAllowed)
-		return
-	}
+	checkReceivedMethod(w, r)
 
-	// construct the request with fixed parameters
-	targetReq := GenerateKeyRequest{
+	rgk := rGenerateKey{
 		Algo: "sm2",
 		Kms:  "",
 		Flow: "classic",
 	}
 
-	// convert struct to json
-	reqBody, err := json.Marshal(targetReq)
+	url := "http://10.20.173.8:80/v1/keypair"
+	rsbody, statusCode, err := makeRequest(&w, rgk, url)
 	if err != nil {
-		log.Printf("JSON marshal error: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		log.Printf("%v", err)
 		return
 	}
 
-	// create a timeout HTTP client (5 seconds timeout)
-	client := &http.Client{Timeout: 5 * time.Second}
-
-	// create the target API request
-	targetURL := "http://10.20.173.8:80/v1/keypair"
-	req, err := http.NewRequest("POST", targetURL, bytes.NewBuffer(reqBody))
-	if err != nil {
-		log.Printf("Request creation error: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// set request headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "KeyGenerationProxy/1.0")
-
-	// send request
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("API request failed: %v", err)
-		http.Error(w, "Backend service unavailable", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	// read and parse response
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("Response read error: %v", err)
-		http.Error(w, "Error reading backend response", http.StatusInternalServerError)
-		return
-	}
-
-	var gr GenerateKeyResponse
-	err = json.Unmarshal(body, &gr)
+	var resgk rsGenerateKey
+	err = json.Unmarshal(rsbody, &resgk)
 	if err != nil {
 		log.Printf("Response parse error: %v", err)
 		http.Error(w, "Error parsing backend response", http.StatusInternalServerError)
 		return
 	}
 
-	CommonPrivateKey = gr.PrivateKey
-	CommonPublicKey = gr.PublicKey
+	CommonPrivateKey = resgk.PrivateKey
+	CommonPublicKey = resgk.PublicKey
 
-	// log response
-	log.Printf("Backend API response - Status: %d, Body: %s", resp.StatusCode, string(body))
+	log.Printf("Backend API response - Status: %d, Body: %v", statusCode, resgk)
 
-	// return target response data to client
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	w.Write(body)
+	w.WriteHeader(statusCode)
+	w.Write(rsbody)
+}
+
+func checkReceivedMethod(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only GET method is allowed", http.StatusMethodNotAllowed)
+		return
+	}
+}
+
+func makeRequest(w *http.ResponseWriter, r any, url string) (responseBody []byte, statusCode int, err error) {
+	rbody, err := json.Marshal(r)
+	if err != nil {
+		http.Error(*w, "marshal request body failed", http.StatusBadRequest)
+		return nil, http.StatusNotImplemented, fmt.Errorf("marshal request body failed: %v", err)
+	}
+
+	request, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(rbody))
+	if err != nil {
+		http.Error(*w, "create request failed", http.StatusInternalServerError)
+		return nil, http.StatusNotImplemented, fmt.Errorf("create request failed: %v", err)
+	}
+
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("User-Agent", "Signatom/1.0")
+
+	client := http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	response, err := client.Do(request)
+	if err != nil {
+		http.Error(*w, "Backend service unavailable", http.StatusBadGateway)
+		return nil, http.StatusNotImplemented, fmt.Errorf("send an HTTP request failed: %v", err)
+	}
+
+	rsbody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, http.StatusNotImplemented, fmt.Errorf("read response failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	return rsbody, response.StatusCode, nil
 }
